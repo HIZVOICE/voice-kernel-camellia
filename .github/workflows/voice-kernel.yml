@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             git bc bison flex libssl-dev libelf-dev dwarves \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            zip xz-utils kmod cpio python3
+            zip unzip xz-utils kmod cpio python3
 
       - name: 3. Clone sources (stock snapshot + OpenELA full history)
         run: |
@@ -38,6 +38,13 @@ jobs:
           #   tip 1e6347375d088ecc896aabb067131d0f9e3c0575 (tag v4.14.357-openela, Linux 4.14.357)
           git clone --branch linux-4.14.y \
             https://github.com/openela/kernel-lts.git openela
+          # Voice repo (this workflow's own repo): carries merge-overlay/resolved/
+          # (the 114 burn-down files for the merge gate). Cloned HERE, after
+          # maximize-build-space (step 1) — that step mounts a fresh volume over
+          # $GITHUB_WORKSPACE and would hide anything checked out before it
+          # (same lesson as the AERA tree.zip: re-fetch after the mount).
+          git clone --depth 1 \
+            https://github.com/HIZVOICE/voice-kernel-camellia.git voice-repo
 
       - name: 4. Graft stock onto OpenELA 4.14.186, merge to v4.14.357-openela
         run: |
@@ -64,10 +71,64 @@ jobs:
           set -e
           git diff --name-only --diff-filter=U > ../merge-conflicts.txt || true
           echo "conflicted files: $(wc -l < ../merge-conflicts.txt)"
-          if [ $MERGE_RC -ne 0 ]; then
-            echo "::error::Merge has unresolved conflicts — see merge-conflicts.txt artifact. Burn-down required before compile."
+          echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
+          # --- Merge overlay: burn-down resolutions (117/117) ---
+          # Build #1 died here with exactly 117 conflicts. They are resolved in
+          # merge-overlay/resolved/ (114 files, shipped as merge-overlay.zip in
+          # the voice-kernel repo and unzipped here — see
+          # merge-repro/BURNDOWN_REPORT.md for the accounting).
+          # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
+          # tree. The overlay covers:
+          #   * 113 conflict resolutions copied over the merged tree, plus
+          #   * the mt6833 vcodec PM port (resolved/.../mt6833/mtk_vcodec_dec_pm.c),
+          #     which is OUTSIDE the 117-file conflict list — the gate alone
+          #     would never produce it, so it is included explicitly here.
+          #   * 4 files stock deleted (removed below, not copied):
+          #       crypto/chacha20_generic.c, include/crypto/chacha20.h,
+          #       lib/chacha20.c, drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
+          OVERLAY_ZIP="$GITHUB_WORKSPACE/voice-repo/merge-overlay.zip"
+          test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
+          unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
+          OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (114 files)"; exit 1; }
+          OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
+          echo "overlay files: $OVERLAY_N (expect 114)"
+          [ "$OVERLAY_N" -eq 114 ] || { echo "::error::overlay has $OVERLAY_N files, expected 114 — stale or incomplete overlay in the repo"; exit 1; }
+          cp -a "$OVERLAY/." ./
+          rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
+            drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
+          # Soundness: every conflicted path must be covered by the overlay or by
+          # one of the 4 deletions — otherwise `git add` below would silently
+          # mark an uncovered file resolved while its conflict markers are still
+          # in it. Check coverage BEFORE staging anything.
+          MISSING=""
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            case "$p" in
+              crypto/chacha20_generic.c|include/crypto/chacha20.h|lib/chacha20.c|drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c) continue ;;
+            esac
+            [ -f "$OVERLAY/$p" ] || MISSING="$MISSING $p"
+          done < ../merge-conflicts.txt
+          if [ -n "$MISSING" ]; then
+            echo "::error::overlay does not cover these conflicted files:$MISSING"
             exit 1
           fi
+          git add -A
+          # Gate now keys on remaining unmerged paths and on stray markers, NOT
+          # on the original merge exit code (the merge exits non-zero by design —
+          # the overlay is what resolves it).
+          git diff --name-only --diff-filter=U > ../merge-conflicts.txt || true
+          echo "conflicted files after overlay: $(wc -l < ../merge-conflicts.txt)"
+          if [ -s ../merge-conflicts.txt ]; then
+            echo "::error::Merge still has unresolved conflicts after overlay — see merge-conflicts.txt artifact."
+            exit 1
+          fi
+          if git grep -q '<<<<<<<' -- . || git grep -q '>>>>>>>' -- .; then
+            echo "::error::conflict markers remain in the tree after overlay"
+            exit 1
+          fi
+          # Conclude the merge so the tree is clean for the build.
+          git -c user.email=voice@local -c user.name=voice commit --no-edit -m "merge OpenELA v4.14.357-openela (+ burn-down overlay 117/117)"
           head -5 Makefile
 
       - name: 5. Upload merge conflict report (always)
@@ -78,13 +139,25 @@ jobs:
           path: merge-conflicts.txt
 
       - name: 6. Fetch pinned Clang
+        env:
+          # PIN VERIFIED 2026-11-07 (see flyme-ksu-bump/PREP.md §6 + BUILD_PLAN.md §4):
+          # AOSP Clang r547379 = Clang 20.0.0, branch aosp-llvm-r547379-release.
+          # URL re-verified live (HTTP 200, application/x-gzip) and COMPILE-PROVEN:
+          # the Flyme BakaSU rebuild (build #2, run 42348014304) built 4.14.357
+          # with this exact tarball (compile 5m20s). This supersedes BUILD_PLAN
+          # §4's r450784e/clang-14 suggestion, whose AOSP archive URL does not
+          # resolve (HTTP 400/404). No sha256 was ever published for this
+          # tarball — verification is URL liveness + the version assertion below
+          # (clang --version must report 20.0.0). Do not invent a sha.
+          CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz
         run: |
-          # PIN: exact AOSP prebuilt clang tarball + sha256 (era-correct clang-14 class,
-          # e.g. clang-r450784e) from android.googlesource.com/platform/prebuilts/clang/host/linux-x86
-          echo "PIN REQUIRED: CLANG_TARBALL_URL + CLANG_TARBALL_SHA256"
-          # curl -L "$CLANG_TARBALL_URL" -o clang.tar.gz
-          # echo "$CLANG_TARBALL_SHA256  clang.tar.gz" | sha256sum -c -
-          # mkdir clang && tar -xzf clang.tar.gz -C clang
+          set -eo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/clang"
+          curl -fsSL "$CLANG_URL" -o /tmp/clang-r547379.tar.gz
+          tar -xzf /tmp/clang-r547379.tar.gz -C "$GITHUB_WORKSPACE/clang"
+          "$GITHUB_WORKSPACE/clang/bin/clang" --version | head -1
+          "$GITHUB_WORKSPACE/clang/bin/clang" --version | grep -q "20.0.0" || { echo "::error::clang version is not 20.0.0 (r547379)"; exit 1; }
+          test -x "$GITHUB_WORKSPACE/clang/bin/clang"
 
       - name: 7. Configure + build Image.gz-dtb
         run: |
@@ -101,17 +174,26 @@ jobs:
 
       - name: 8. Package AnyKernel3 zip (rootless)
         run: |
-          # PIN: osm0sis/AnyKernel3 commit
-          git clone https://github.com/osm0sis/AnyKernel3.git ak3 # PIN: checkout a fixed commit
+          # PIN VERIFIED 2026-11-07 (see flyme-ksu-bump/PREP.md §1):
+          # osm0sis/AnyKernel3 @ e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          # ("AK3: usage/documentation comment touchups", 2026-08-10, osm0sis).
+          # Verified via GitHub API (commit object exists) + ak3-core.sh at that
+          # commit is byte-identical to the verified v6 zip's (sha256
+          # f7a51cfe2e093016a34a76e16de6c9885c2d1992c3482fcabc668680e1f0f6bb;
+          # AK_BASE_VERSION=20260809 in the template's updater-script).
+          # COMPILE-PROVEN: the Flyme BakaSU rebuild (build #2) packaged its
+          # working zip with this exact pin.
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          git -C ak3 checkout e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          test "$(git -C ak3 rev-parse HEAD)" = e4b1bb25ca2aabcfd57f694a5998d87130701b71
           cp openela/arch/arm64/boot/Image.gz-dtb ak3/
-          # anykernel.sh modelled on the verified v6 package:
-          #   kernel.string="Voice 4.14.357-openela — Pack 0 (rootless)"
-          #   do.devicecheck=1; device.name1=camellia; device.name2=camellian
-          #   block=/dev/block/by-name/boot; is_slot_device=auto
-          #   ramdisk_compression=auto; patch_vbmeta_flag=auto
-          #   do.modules=0; do.systemless=1; do.cleanup=1
-          #   install: split_boot; flash_boot;
-          # PIN: ship the reviewed anykernel.sh from the voice repo alongside this workflow.
+          # anykernel.sh: reviewed Voice file from the voice-kernel repo
+          # (modelled on the verified v6 package, only kernel.string changed
+          # to "Voice 4.14.357-openela — Pack 0 (rootless)"). Replaces the
+          # AK3 template's generic anykernel.sh — the template has no
+          # devicecheck/block values for camellia.
+          test -f "$GITHUB_WORKSPACE/voice-repo/anykernel.sh" || { echo "::error::anykernel.sh missing in voice-kernel repo"; exit 1; }
+          cp "$GITHUB_WORKSPACE/voice-repo/anykernel.sh" ak3/anykernel.sh
           cd ak3 && zip -r9 ../AnyKernel3-camellia-Voice-v0-noroot.zip . -x '.git/*'
 
       - name: 9. Upload kernel zip
