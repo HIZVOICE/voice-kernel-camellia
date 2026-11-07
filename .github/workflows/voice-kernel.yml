@@ -1,0 +1,121 @@
+# Voice Kernel — Pack 0 (rootless) build workflow — DRAFT
+# Implements BUILD_PLAN.md §2–§4. Everything runs on the GitHub runner.
+# Items marked PIN: must be fixed to exact values when this is adopted into a repo.
+name: Voice Kernel (Pack 0, rootless)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    steps:
+      - name: 1. Free disk space
+        uses: easimon/maximize-build-space@v10 # PIN: or equivalent; kernel builds need ~40+ GB
+        with:
+          root-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-docker-images: 'true'
+
+      - name: 2. Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git bc bison flex libssl-dev libelf-dev dwarves \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            zip xz-utils kmod cpio python3
+
+      - name: 3. Clone sources (stock snapshot + OpenELA full history)
+        run: |
+          # Stock: MiCode/Xiaomi_Kernel_OpenSource @ camellian-t-oss
+          #   HEAD f4e416aea06c81f1e661d0524c0554f0538d11cb (Linux 4.14.186)
+          git clone --depth 1 --branch camellian-t-oss \
+            https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git stock
+          # OpenELA: openela/kernel-lts @ linux-4.14.y — FULL history (needed for graft base)
+          #   tip 1e6347375d088ecc896aabb067131d0f9e3c0575 (tag v4.14.357-openela, Linux 4.14.357)
+          git clone --branch linux-4.14.y \
+            https://github.com/openela/kernel-lts.git openela
+
+      - name: 4. Graft stock onto OpenELA 4.14.186, merge to v4.14.357-openela
+        run: |
+          cd openela
+          # Locate the 4.14.186 point in OpenELA history (no v4.14.186 tag exists):
+          # walk Makefile history to the newest commit whose SUBLEVEL is 186.
+          BASE=""
+          for c in $(git log --format=%H -- Makefile); do
+            if git show $c:Makefile | grep -q '^SUBLEVEL = 186$'; then BASE=$c; break; fi
+          done
+          test -n "$BASE" && echo "OpenELA 4.14.186 base: $BASE"
+          # Import the stock tree as one commit on top of nothing, then graft.
+          git checkout --orphan voice-base
+          git rm -rf . >/dev/null 2>&1 || true
+          rsync -a --exclude=.git ../stock/ ./
+          git add -A
+          git -c user.email=voice@local -c user.name=voice commit -m "stock camellian-t-oss f4e416ae (4.14.186)"
+          git replace --graft voice-base $BASE
+          # True two-sided merge to the OpenELA tip:
+          set +e
+          git -c user.email=voice@local -c user.name=voice merge \
+            -m "merge OpenELA v4.14.357-openela" v4.14.357-openela
+          MERGE_RC=$?
+          set -e
+          git diff --name-only --diff-filter=U > ../merge-conflicts.txt || true
+          echo "conflicted files: $(wc -l < ../merge-conflicts.txt)"
+          if [ $MERGE_RC -ne 0 ]; then
+            echo "::error::Merge has unresolved conflicts — see merge-conflicts.txt artifact. Burn-down required before compile."
+            exit 1
+          fi
+          head -5 Makefile
+
+      - name: 5. Upload merge conflict report (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-conflicts
+          path: merge-conflicts.txt
+
+      - name: 6. Fetch pinned Clang
+        run: |
+          # PIN: exact AOSP prebuilt clang tarball + sha256 (era-correct clang-14 class,
+          # e.g. clang-r450784e) from android.googlesource.com/platform/prebuilts/clang/host/linux-x86
+          echo "PIN REQUIRED: CLANG_TARBALL_URL + CLANG_TARBALL_SHA256"
+          # curl -L "$CLANG_TARBALL_URL" -o clang.tar.gz
+          # echo "$CLANG_TARBALL_SHA256  clang.tar.gz" | sha256sum -c -
+          # mkdir clang && tar -xzf clang.tar.gz -C clang
+
+      - name: 7. Configure + build Image.gz-dtb
+        run: |
+          cd openela
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          make ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               camellian_defconfig
+          ./scripts/config --set-str LOCALVERSION "-Voice"
+          make ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               -j$(nproc) Image.gz-dtb
+          ls -la arch/arm64/boot/Image.gz-dtb
+
+      - name: 8. Package AnyKernel3 zip (rootless)
+        run: |
+          # PIN: osm0sis/AnyKernel3 commit
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3 # PIN: checkout a fixed commit
+          cp openela/arch/arm64/boot/Image.gz-dtb ak3/
+          # anykernel.sh modelled on the verified v6 package:
+          #   kernel.string="Voice 4.14.357-openela — Pack 0 (rootless)"
+          #   do.devicecheck=1; device.name1=camellia; device.name2=camellian
+          #   block=/dev/block/by-name/boot; is_slot_device=auto
+          #   ramdisk_compression=auto; patch_vbmeta_flag=auto
+          #   do.modules=0; do.systemless=1; do.cleanup=1
+          #   install: split_boot; flash_boot;
+          # PIN: ship the reviewed anykernel.sh from the voice repo alongside this workflow.
+          cd ak3 && zip -r9 ../AnyKernel3-camellia-Voice-v0-noroot.zip . -x '.git/*'
+
+      - name: 9. Upload kernel zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3-camellia-Voice-v0-noroot
+          path: AnyKernel3-camellia-Voice-v0-noroot.zip
