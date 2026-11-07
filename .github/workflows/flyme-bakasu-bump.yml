@@ -269,6 +269,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eo pipefail
+          # NOTE: this workflow never checks out the repo (no actions/checkout),
+          # so the workspace is not a git repo and `gh` cannot infer the
+          # repository from a remote. Pass it explicitly (build #1 failed here:
+          # "fatal: not a git repository").
           gh release create "$RELEASE_TAG" "$ZIP_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Flyme Kernel camellia — BakaSU driver 35257" \
             --notes "Rebuild of the Artslon Flyme kernel (4.14.357-openela-rc1, stock clocks, camellia_defconfig) with the in-kernel BakaSU/ReSukiSU driver updated from 35090 to 35257 (BakaSU main @ 516d3e87, 4557 commits). Current BakaSU managers work with this driver — no old manager version needed. Built with AOSP Clang r547379 (20.0.0). Packaged with AnyKernel3 @ e4b1bb2 (same scaffold as the verified v6 zip). Flash via recovery. SUSFS off, as in v6."
