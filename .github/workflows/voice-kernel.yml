@@ -159,6 +159,22 @@ jobs:
             echo "::error::conflict markers remain in these files after overlay:$MARKED"
             exit 1
           fi
+          # Balance check (build #4 lesson): a resolved Makefile with a lost
+          # endif dies at compile with a bare "missing endif". Every
+          # Makefile-style file the overlay touched must balance if/endif.
+          # Make enforces per-file balance, so this can only fail on files
+          # that would break the build anyway. Fail naming the file.
+          BAL_BAD=""
+          for f in $(find "$OVERLAY" -type f \( -name 'Makefile*' -o -name '*.mk' \)); do
+            tgt="${f#$OVERLAY/}"
+            n_if=$(grep -cE '^(ifeq|ifdef|ifndef|ifneq)' "$tgt" || true)
+            n_end=$(grep -cE '^endif' "$tgt" || true)
+            [ "$n_if" -eq "$n_end" ] || BAL_BAD="$BAL_BAD $tgt($n_if/$n_end)"
+          done
+          if [ -n "$BAL_BAD" ]; then
+            echo "::error::unbalanced if/endif in overlay Makefiles:$BAL_BAD"
+            exit 1
+          fi
           # Conclude the merge so the tree is clean for the build.
           git -c user.email=voice@local -c user.name=voice commit --no-edit -m "merge OpenELA v4.14.357-openela (+ burn-down overlay 117/117)"
           head -5 Makefile
