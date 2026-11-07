@@ -215,6 +215,13 @@ jobs:
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                camellian_defconfig
           ./scripts/config --set-str LOCALVERSION "-Voice"
+          # Pack 0: stock defconfig enables CONFIG_LTO_CLANG (ThinLTO), but
+          # the Pack-0 link uses GNU ld.gold, which rejects
+          # --thinlto-cache-dir -- build #5 died at the vDSO link on it.
+          # ThinLTO returns properly with LLD in Pack 1; for Pack 0 build
+          # LTO off, exactly like the proven Flyme build (same Clang, GNU ld).
+          ./scripts/config --disable THINLTO
+          ./scripts/config --disable LTO_CLANG
           make ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                -j$(nproc) Image.gz-dtb
