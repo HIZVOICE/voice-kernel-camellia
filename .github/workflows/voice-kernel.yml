@@ -89,7 +89,7 @@ jobs:
           echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
           # --- Merge overlay: burn-down resolutions (117/117) ---
           # Build #1 died here with exactly 117 conflicts. They are resolved in
-          # merge-overlay/resolved/ (117 files, shipped as merge-overlay.zip in
+          # merge-overlay/resolved/ (119 files, shipped as merge-overlay.zip in
           # the voice-kernel repo and unzipped here — see
           # merge-repro/BURNDOWN_REPORT.md for the accounting).
           # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
@@ -109,6 +109,14 @@ jobs:
           #     OpenELA's bits.h and an unused variable, which killed build #9
           #     at sound/soc/mediatek/fs1815n/fsm_core.o (-Werror). BIT is now
           #     #ifndef-guarded; the unused i2sctrl is removed.
+          #   * the f2fs + clkdbg fixes (resolved/fs/f2fs/f2fs.h +
+          #     resolved/drivers/clk/mediatek/clkdbg.c), also OUTSIDE the
+          #     117-file conflict list — the merge kept stock's f2fs.h (no
+          #     f2fs_msg declaration, so segment.c failed in build #10) and
+          #     stock's clkdbg.c has latent u32/u32* mismatches that Clang
+          #     -Werror promotes to errors. f2fs.h now declares f2fs_msg;
+          #     clkdbg.c dereferences the single status word and takes a
+          #     scalar in save_all_clks_state.
           #   * 4 files stock deleted (removed below, not copied):
           #       crypto/chacha20_generic.c, include/crypto/chacha20.h,
           #       lib/chacha20.c, drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
@@ -116,10 +124,10 @@ jobs:
           test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
           unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
           OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
-          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (117 files)"; exit 1; }
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (119 files)"; exit 1; }
           OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
-          echo "overlay files: $OVERLAY_N (expect 117)"
-          [ "$OVERLAY_N" -eq 117 ] || { echo "::error::overlay has $OVERLAY_N files, expected 117 — stale or incomplete overlay in the repo"; exit 1; }
+          echo "overlay files: $OVERLAY_N (expect 119)"
+          [ "$OVERLAY_N" -eq 119 ] || { echo "::error::overlay has $OVERLAY_N files, expected 119 — stale or incomplete overlay in the repo"; exit 1; }
           cp -a "$OVERLAY/." ./
           rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
             drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
