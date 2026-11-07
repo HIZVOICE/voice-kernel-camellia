@@ -222,6 +222,14 @@ jobs:
           # LTO off, exactly like the proven Flyme build (same Clang, GNU ld).
           ./scripts/config --disable THINLTO
           ./scripts/config --disable LTO_CLANG
+          # Build #6: the config edits left a new Kconfig symbol
+          # (RANDOMIZE_MODULE_REGION_FULL) without a value, and the build's
+          # silentoldconfig prompted for it interactively -- which aborts
+          # with no TTY in CI. olddefconfig assigns defaults to any such
+          # symbol without prompting, so the build can proceed.
+          make ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
+               CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+               olddefconfig
           make ARCH=arm64 CC=clang CLANG_TRIPLE=aarch64-linux-gnu- \
                CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
                -j$(nproc) Image.gz-dtb
