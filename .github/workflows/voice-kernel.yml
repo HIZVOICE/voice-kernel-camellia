@@ -12,9 +12,16 @@ jobs:
     timeout-minutes: 350
     steps:
       - name: 1. Free disk space
-        uses: easimon/maximize-build-space@v10 # PIN: or equivalent; kernel builds need ~40+ GB
+        uses: easimon/maximize-build-space@v10
         with:
-          root-reserve-mb: 4096
+          # Reserves proven by the AERA builds on this same runner class.
+          # Build #2 died because root-reserve-mb 4096 left root too tight
+          # for apt (disk full during `apt-get update` in step 2, both
+          # attempts); AERA build #6 also showed small reserves break this
+          # step. These values pass and leave root room for apt.
+          root-reserve-mb: 16384
+          temp-reserve-mb: 12288
+          swap-file-mb: 8192
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -22,11 +29,18 @@ jobs:
 
       - name: 2. Install build deps
         run: |
+          # Build #2 died here: disk full during apt-get update (both attempts).
+          # Clear apt's own cache + stale lists first, show free space, then
+          # update. If root is still under 10G free, fail fast with the numbers.
+          df -h / /tmp "$GITHUB_WORKSPACE"
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git bc bison flex libssl-dev libelf-dev dwarves \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             zip unzip xz-utils kmod cpio python3
+          df -h /
 
       - name: 3. Clone sources (stock snapshot + OpenELA full history)
         run: |
