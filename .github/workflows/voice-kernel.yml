@@ -89,7 +89,7 @@ jobs:
           echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
           # --- Merge overlay: burn-down resolutions (117/117) ---
           # Build #1 died here with exactly 117 conflicts. They are resolved in
-          # merge-overlay/resolved/ (181 files, shipped as merge-overlay.zip in
+          # merge-overlay/resolved/ (184 files, shipped as merge-overlay.zip in
           # the voice-kernel repo and unzipped here — see
           # merge-repro/BURNDOWN_REPORT.md for the accounting).
           # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
@@ -229,10 +229,10 @@ jobs:
           test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
           unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
           OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
-          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (181 files)"; exit 1; }
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (184 files)"; exit 1; }
           OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
-          echo "overlay files: $OVERLAY_N (expect 181)"
-          [ "$OVERLAY_N" -eq 181 ] || { echo "::error::overlay has $OVERLAY_N files, expected 181 — stale or incomplete overlay in the repo"; exit 1; }
+          echo "overlay files: $OVERLAY_N (expect 184)"
+          [ "$OVERLAY_N" -eq 184 ] || { echo "::error::overlay has $OVERLAY_N files, expected 184 — stale or incomplete overlay in the repo"; exit 1; }
           cp -a "$OVERLAY/." ./
           rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
             drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
