@@ -89,7 +89,7 @@ jobs:
           echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
           # --- Merge overlay: burn-down resolutions (117/117) ---
           # Build #1 died here with exactly 117 conflicts. They are resolved in
-          # merge-overlay/resolved/ (122 files, shipped as merge-overlay.zip in
+          # merge-overlay/resolved/ (174 files, shipped as merge-overlay.zip in
           # the voice-kernel repo and unzipped here — see
           # merge-repro/BURNDOWN_REPORT.md for the accounting).
           # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
@@ -131,6 +131,20 @@ jobs:
           #     brackets), which no -I path covers; the sibling uses quotes,
           #     so line 19 is quoted now. Same bug class as clkdbg-mt6833.c;
           #     the tree was swept for other instances and none was found.
+          #   * the helio-dvfsrc + full-tree sweep fixes (52 new files, 82
+          #     include sites, all angle -> quotes) — build #13 died on the
+          #     same bug class a third time (helio-dvfsrc-qos.c:32), because
+          #     the build #12 sweep only checked the overlay + a partial
+          #     cache. This time the FULL stock (78,342 files) and tip
+          #     (45,634 files) trees were shallow-cloned and swept with an
+          #     -I-coverage filter + Kconfig closure (392 defconfig =y ->
+          #     2,708 resolved =y). Every reachable real instance is fixed:
+          #     helio-dvfsrc-v3 (15 files), audio_ipi framework (8), lpm
+          #     mt6833 (9), battery (5), devmpu/smi (2), cache-auditor /
+          #     dbgtop / debug_latch / leds / perf / tee_sanity / timer /
+          #     typec / pinctrl / spmi / watchdog (14). 577 unreachable real
+          #     candidates remain (staging, other-platform, other-arch) —
+          #     none can be compiled by this defconfig.
           #   * 4 files stock deleted (removed below, not copied):
           #       crypto/chacha20_generic.c, include/crypto/chacha20.h,
           #       lib/chacha20.c, drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
@@ -138,10 +152,10 @@ jobs:
           test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
           unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
           OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
-          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (122 files)"; exit 1; }
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (174 files)"; exit 1; }
           OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
-          echo "overlay files: $OVERLAY_N (expect 122)"
-          [ "$OVERLAY_N" -eq 122 ] || { echo "::error::overlay has $OVERLAY_N files, expected 122 — stale or incomplete overlay in the repo"; exit 1; }
+          echo "overlay files: $OVERLAY_N (expect 174)"
+          [ "$OVERLAY_N" -eq 174 ] || { echo "::error::overlay has $OVERLAY_N files, expected 174 — stale or incomplete overlay in the repo"; exit 1; }
           cp -a "$OVERLAY/." ./
           rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
             drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
