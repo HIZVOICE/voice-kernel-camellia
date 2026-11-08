@@ -89,7 +89,7 @@ jobs:
           echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
           # --- Merge overlay: burn-down resolutions (117/117) ---
           # Build #1 died here with exactly 117 conflicts. They are resolved in
-          # merge-overlay/resolved/ (179 files, shipped as merge-overlay.zip in
+          # merge-overlay/resolved/ (181 files, shipped as merge-overlay.zip in
           # the voice-kernel repo and unzipped here — see
           # merge-repro/BURNDOWN_REPORT.md for the accounting).
           # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
@@ -195,6 +195,33 @@ jobs:
           #     needs no fix (resolves via own-dir -I; mtk_dp.o is not
           #     built — CONFIG_MTK_HDMI_SUPPORT is set nowhere), so
           #     neither file is in the overlay.
+          #   * the stack-frame fix (drivers/input/touchscreen/mediatek/
+          #     FT8722/focaltech_test/focaltech_test.c + NT36672C/
+          #     nt36xxx_mp_ctrlram.c) — the build #17 failure:
+          #     fts_tp_selftest_read declares 'char tmp[4096]' on the stack
+          #     but only ever formats one integer into it
+          #     (snprintf(tmp, PAGE_SIZE, "%d\n", my_test_result)) — the
+          #     4096-byte buffer is pure waste (max output 12 chars + NUL),
+          #     and the frame was 4176 vs the stock defconfig's own
+          #     CONFIG_FRAME_WARN=3600 limit. Fix shrinks the buffer to
+          #     [16] with the paired snprintf(PAGE_SIZE) -> snprintf
+          #     (sizeof(tmp)) (mandatory: a 16-byte buffer with a PAGE_SIZE
+          #     size argument would let snprintf write past it). The same
+          #     waste pattern exists at TWO Novatek sites in
+          #     nt36xxx_mp_ctrlram.c (nvt_selftest_open:1230,
+          #     nvt_tp_selftest_store:1776 — 'unsigned char
+          #     mpcriteria[4096]' holding "novatek-mp-criteria-%04X", 25
+          #     chars; shrunk to [32]); both are built unconditionally and
+          #     a 4096-byte address-taken stack array guarantees a frame
+          #     over 3600, so they would have been build #18's failure.
+          #     Rejected: per-file CFLAGS override (silences a real 4 KB
+          #     frame instead of fixing the waste), raising the global
+          #     CONFIG_FRAME_WARN (masks real stack bugs kernel-wide),
+          #     disabling the driver (FTS support is required for the
+          #     both-panels kernel). Same-class sweep of the whole
+          #     drivers/input/touchscreen/mediatek/ tree found exactly
+          #     these 3 sites (the NT36672C xdata arrays are static, not
+          #     stack).
           #   * 4 files stock deleted (removed below, not copied):
           #       crypto/chacha20_generic.c, include/crypto/chacha20.h,
           #       lib/chacha20.c, drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
@@ -202,10 +229,10 @@ jobs:
           test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
           unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
           OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
-          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (179 files)"; exit 1; }
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (181 files)"; exit 1; }
           OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
-          echo "overlay files: $OVERLAY_N (expect 179)"
-          [ "$OVERLAY_N" -eq 179 ] || { echo "::error::overlay has $OVERLAY_N files, expected 179 — stale or incomplete overlay in the repo"; exit 1; }
+          echo "overlay files: $OVERLAY_N (expect 181)"
+          [ "$OVERLAY_N" -eq 181 ] || { echo "::error::overlay has $OVERLAY_N files, expected 181 — stale or incomplete overlay in the repo"; exit 1; }
           cp -a "$OVERLAY/." ./
           rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
             drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
