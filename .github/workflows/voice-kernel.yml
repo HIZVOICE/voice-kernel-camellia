@@ -89,7 +89,7 @@ jobs:
           echo "merge exit code: $MERGE_RC (non-zero is expected — conflicts are resolved by the overlay below)"
           # --- Merge overlay: burn-down resolutions (117/117) ---
           # Build #1 died here with exactly 117 conflicts. They are resolved in
-          # merge-overlay/resolved/ (174 files, shipped as merge-overlay.zip in
+          # merge-overlay/resolved/ (176 files, shipped as merge-overlay.zip in
           # the voice-kernel repo and unzipped here — see
           # merge-repro/BURNDOWN_REPORT.md for the accounting).
           # Overlay them BEFORE the conflict gate runs, so the gate sees a clean
@@ -145,6 +145,21 @@ jobs:
           #     typec / pinctrl / spmi / watchdog (14). 577 unreachable real
           #     candidates remain (staging, other-platform, other-arch) —
           #     none can be compiled by this defconfig.
+          #   * the vsprintf + MTK DRM trace fixes (resolved/lib/vsprintf.c,
+          #     resolved/drivers/gpu/drm/mediatek/Makefile) — stock
+          #     backported the 4.15 %p-hashing apparatus (ptr_key /
+          #     random_ready_callback) but OpenELA 4.14.357 removed that
+          #     API upstream, so the merged vsprintf.c referenced a struct
+          #     and function that exist nowhere in the tree. Restoring the
+          #     declarations would only move the failure to link time, so
+          #     stock's hashing backport is dropped (65 lines) to match
+          #     tip's upstream behavior — plain %p prints the raw pointer,
+          #     %pK restriction untouched. The DRM trace header defines
+          #     TRACE_INCLUDE_PATH ., so define_trace.h re-includes it as
+          #     "./mtk_layer_layout_trace.h" — only resolvable with the
+          #     driver's own directory on the include path; the Makefile
+          #     gains CFLAGS_mtk_layering_rule_base.o := -I$(src), the
+          #     i915 upstream precedent.
           #   * 4 files stock deleted (removed below, not copied):
           #       crypto/chacha20_generic.c, include/crypto/chacha20.h,
           #       lib/chacha20.c, drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
@@ -152,10 +167,10 @@ jobs:
           test -f "$OVERLAY_ZIP" || { echo "::error::merge overlay zip missing at $OVERLAY_ZIP — the voice-kernel repo must contain merge-overlay.zip"; exit 1; }
           unzip -q "$OVERLAY_ZIP" -d "$GITHUB_WORKSPACE/voice-repo/"
           OVERLAY="$GITHUB_WORKSPACE/voice-repo/merge-overlay/resolved"
-          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (174 files)"; exit 1; }
+          test -d "$OVERLAY" || { echo "::error::merge overlay missing at $OVERLAY — the voice-kernel repo must contain merge-overlay/resolved/ (176 files)"; exit 1; }
           OVERLAY_N="$(find "$OVERLAY" -type f | wc -l)"
-          echo "overlay files: $OVERLAY_N (expect 174)"
-          [ "$OVERLAY_N" -eq 174 ] || { echo "::error::overlay has $OVERLAY_N files, expected 174 — stale or incomplete overlay in the repo"; exit 1; }
+          echo "overlay files: $OVERLAY_N (expect 176)"
+          [ "$OVERLAY_N" -eq 176 ] || { echo "::error::overlay has $OVERLAY_N files, expected 176 — stale or incomplete overlay in the repo"; exit 1; }
           cp -a "$OVERLAY/." ./
           rm -f crypto/chacha20_generic.c include/crypto/chacha20.h lib/chacha20.c \
             drivers/media/platform/mtk-vcodec/mtk_vcodec_dec_pm.c
